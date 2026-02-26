@@ -1,16 +1,9 @@
 name: Build Windows Executable
 
 on:
-  workflow_dispatch:
-    inputs:
-      version:
-        description: '版本号'
-        required: false
-        default: ''
-  
   push:
-    branches: [ main, master ]
-    tags: [ 'v*' ]
+    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -18,8 +11,6 @@ jobs:
     
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -30,30 +21,36 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller
+          # 进入项目子目录安装依赖
+          cd "process-improvement-baseline&model&project"
           if (Test-Path requirements.txt) {
             pip install -r requirements.txt
           }
       
-      - name: Get version
-        id: version
-        shell: pwsh
-        run: |
-          if ("${{ github.event.inputs.version }}" -ne "") {
-            $VERSION = "${{ github.event.inputs.version }}"
-          } else {
-            $VERSION = git describe --tags --always --dirty
-            if ($LASTEXITCODE -ne 0) {
-              $VERSION = "dev-$(git rev-parse --short HEAD)"
-            }
-          }
-          echo "version=$VERSION" >> $env:GITHUB_OUTPUT
-      
       - name: Build with PyInstaller
         run: |
-          pyinstaller --onefile --name MyTool main.py
+          # 进入项目子目录
+          cd "process-improvement-baseline&model&project"
+          
+          # 使用run.py作为入口文件
+          pyinstaller --onefile `
+            --name "ProcessImprovementTool" `
+            --add-data "config;config" `
+            --add-data "app;app" `
+            --hidden-import config `
+            --hidden-import app `
+            run.py
+          
+          # 检查是否生成成功
+          if (Test-Path dist/ProcessImprovementTool.exe) {
+            echo "✅ 构建成功"
+          } else {
+            echo "❌ 构建失败"
+            exit 1
+          }
       
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MyTool-Windows-${{ steps.version.outputs.version }}
-          path: dist/*.exe
+          name: ProcessImprovementTool-Windows
+          path: process-improvement-baseline&model&project/dist/*.exe

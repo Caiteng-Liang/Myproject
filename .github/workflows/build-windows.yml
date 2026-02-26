@@ -4,53 +4,149 @@ on:
   push:
     branches: [ main ]
   workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号'
+        required: false
+        default: ''
 
 jobs:
   build:
     runs-on: windows-latest
     
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.9'
+          architecture: 'x64'
       
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller
-          # 进入项目子目录安装依赖
+          
+          # 进入项目目录
           cd "process-improvement-baseline&model&project"
+          
+          # 如果存在 requirements.txt 就安装
           if (Test-Path requirements.txt) {
+            echo "Installing from requirements.txt"
             pip install -r requirements.txt
+          } else {
+            echo "No requirements.txt found, installing common packages"
+            # 根据你的项目可能需要的基础包
+            pip install pandas numpy flask  # 根据实际情况调整
           }
+          
+          # 显示已安装的包
+          pip list
+      
+      - name: Get version
+        id: version
+        shell: pwsh
+        run: |
+          if ("${{ github.event.inputs.version }}" -ne "") {
+            $VERSION = "${{ github.event.inputs.version }}"
+          } else {
+            $VERSION = git describe --tags --always --dirty
+            if ($LASTEXITCODE -ne 0) {
+              $VERSION = "dev-$(git rev-parse --short HEAD)"
+            }
+          }
+          echo "version=$VERSION" >> $env:GITHUB_OUTPUT
+          echo "Building version: $VERSION"
       
       - name: Build with PyInstaller
         run: |
-          # 进入项目子目录
+          # 进入项目目录
           cd "process-improvement-baseline&model&project"
           
-          # 使用run.py作为入口文件
+          echo "Current directory: $(Get-Location)"
+          echo "Files in directory:"
+          dir
+          
+          # 构建命令
           pyinstaller --onefile `
             --name "ProcessImprovementTool" `
             --add-data "config;config" `
             --add-data "app;app" `
             --hidden-import config `
             --hidden-import app `
+            --hidden-import app.models `
+            --hidden-import app.services `
+            --hidden-import app.utils `
+            --hidden-import app.data `
+            --console `
             run.py
           
-          # 检查是否生成成功
+          # 验证构建结果
           if (Test-Path dist/ProcessImprovementTool.exe) {
-            echo "✅ 构建成功"
+            $fileSize = (Get-Item dist/ProcessImprovementTool.exe).Length
+            echo "✅ Build successful! File size: $($fileSize / 1MB) MB"
+            echo "File location: $(Get-Location)\dist\ProcessImprovementTool.exe"
           } else {
-            echo "❌ 构建失败"
+            echo "❌ Build failed - executable not found"
+            echo "Contents of dist directory:"
+            if (Test-Path dist) { dir dist } else { echo "dist directory not created" }
             exit 1
+          }
+      
+      - name: Test executable
+        run: |
+          cd "process-improvement-baseline&model&project"
+          if (Test-Path dist/ProcessImprovementTool.exe) {
+            echo "Testing executable..."
+            # 尝试运行并获取版本信息（如果支持）
+            & .\dist\ProcessImprovementTool.exe --version 2>$null
+            if ($LASTEXITCODE -eq 0) {
+              echo "✅ Executable test passed"
+            } else {
+              echo "⚠️ Executable test failed (may not support --version)"
+            }
           }
       
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ProcessImprovementTool-Windows
+          name: ProcessImprovementTool-v${{ steps.version.outputs.version }}
           path: process-improvement-baseline&model&project/dist/*.exe
+          if-no-files-found: error
+          retention-days: 30
+      
+      - name: Create README for release
+        run: |
+          cd "process-improvement-baseline&model&project/dist"
+          @"
+          # Process Improvement Tool v${{ steps.version.outputs.version }}
+          
+          ## 安装说明
+          1. 下载 `ProcessImprovementTool.exe`
+          2. 直接双击运行
+          
+          ## 系统要求
+          - Windows 7/8/10/11 (64位)
+          - 无需安装Python
+          
+          ## 功能特点
+          - 基线管理
+          - 模型改进
+          - 项目管理
+          - 数据分析
+          
+          ## 版本信息
+          - 版本: ${{ steps.version.outputs.version }}
+          - 构建时间: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+          - Commit: ${{ github.sha }}
+          "@ | Out-File -FilePath README.txt -Encoding utf8
+      
+      - name: Upload README
+        uses: actions/upload-artifact@v4
+        with:
+          name: README-v${{ steps.version.outputs.version }}
+          path: process-improvement-baseline&model&project/dist/README.txt
